@@ -17,9 +17,7 @@ struct TermuxSensor {
 
 //#[allow(clippy::zombie_processes)]
 fn main() {
-    // TIP: Esegui "termux-sensor -l" nel terminale per copiare il nome esatto
     let accelerometer = TermuxSensor {
-        // Se "BMI120..." non va, prova il generico "Accelerometer"
         name: "Linear Acceleration".to_string(),
         delay_ms: 200,
     };
@@ -69,10 +67,9 @@ fn main() {
                 if counter > 100
                     && let Ok(child) = child.lock()
                 {
-                    
                     let _ = stdout().flush();
                     println!("\nexiting...");
-                    send_sigint_and_then_sigterm(child);
+                    send_sig_int_term_kill_wait(child);
                 }
 
                 // Sovrascriviamo la riga corrente per un effetto "dashboard" pulito
@@ -104,18 +101,18 @@ fn main() {
 /// it propagate to all childs and so release the sensor resource,
 /// otherwise the SIGINT won't have effect and sensor resource will
 /// not be available anymore causing to not sending data. THEN it is
-/// necessary to also send a SIGTERM after some secs to terminate the 
+/// necessary to also send a SIGTERM after some secs to terminate the
 /// program, finally try to kill it after a little sleep from the SIGTERM,
 /// just to be sure.
-fn send_sigint_and_then_sigterm(mut child: MutexGuard<'_, Child>) {
+fn send_sig_int_term_kill_wait(mut child: MutexGuard<'_, Child>) {
     let id = child.id();
     let _ = process::Command::new("kill")
         .args(["-2", &format!("-{}", id)]) // Note the "-" before the PID
         .output();
-    
+
     // GIVE TIME TO RELEASE SENSOR
     thread::sleep(Duration::from_secs(2));
-    
+
     let _ = process::Command::new("kill")
         .args([&format!("-{}", id)]) // Note the "-" before the PID
         .output();
@@ -131,8 +128,6 @@ fn send_sigint_and_then_sigterm(mut child: MutexGuard<'_, Child>) {
         }
     }
 
-    // CRITICAL: Reap the zombie
-    // Without this, the process entry remains in the OS table (defunct)
-    let _ = child.wait(); 
-    println!("KILLER: Cleanup complete.");
+    let exit_status = child.wait();
+    println!("Exit status: {:?}",exit_status);
 }
