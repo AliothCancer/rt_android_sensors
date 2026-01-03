@@ -1,0 +1,11 @@
+# .cargo/config.toml
+
+# Configurazione specifica per il target Android ARM64
+[target.aarch64-linux-android]
+# Devi puntare al linker clang fornito dall'NDK.
+# Sostituisci <NDK_PATH> con il percorso reale del tuo NDK e <HOST_OS> con il tuo sistema (es. linux-x86_64, darwin-x86_64, windows-x86_64).
+# Nota: L'API level 29 corrisponde ad Android 10.
+linker = "/home/giulio/Android/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+
+# Opzionale: flag per assicurarsi che le librerie vengano linkate correttamente
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
