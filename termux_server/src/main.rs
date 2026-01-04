@@ -1,133 +1,123 @@
-use std::io::stdout;
-use std::os::unix::process::CommandExt;
+mod sensors;
+
 use std::process::Child;
 use std::sync::MutexGuard;
-// 1. Necessary for process_group()
+use std::thread::JoinHandle;
 use std::{
-    io::{BufRead, BufReader, Write},
-    process::{self, Stdio},
+    process::{self},
     sync::{Arc, Mutex, mpsc},
-    thread,
+    thread::{self},
     time::Duration,
 };
-struct TermuxSensor {
-    name: String,
-    delay_ms: u64,
-}
 
-//#[allow(clippy::zombie_processes)]
+use crate::sensors::TermuxSensor;
+
 fn main() {
     let accelerometer = TermuxSensor {
         name: "Linear Acceleration".to_string(),
-        delay_ms: 200,
+        delay_ms: 0,
     };
 
-    let (tx, rx) = mpsc::channel();
+    let (sensor_tx, sensor_rx) = mpsc::channel();
 
-    println!("MAIN: Avvio lettura sensore: {}", accelerometer.name);
+    println!(
+        "MAIN: Avvio lettura\n delay: {} ms || sensore: {}",
+        accelerometer.delay_ms, accelerometer.name
+    );
 
-    let child = Arc::new(Mutex::new(
-        process::Command::new("termux-sensor")
-            .args(["-s", &accelerometer.name])
-            .args(["-d", &accelerometer.delay_ms.to_string()])
-            .stdout(Stdio::piped())
-            //.stdin(Stdio::inherit())
-            .process_group(0)
-            .spawn()
-            .expect("THREAD: Impossibile avviare termux-sensor"),
-    ));
-    let child_ref = Arc::clone(&child);
+    let child = Arc::new(Mutex::new(accelerometer.spawn_process()));
+    let reader_child = Arc::clone(&child);
+    let termination_child = Arc::clone(&child);
 
-    let _sh_handle = thread::spawn(move || {
-        // 1. Apri il lucchetto e prendi ciò che serve
-        let stdout_stream = {
-            let mut guard = child_ref.lock().expect("Mutex poisoned");
-            guard.stdout.take() // Prendi ownership e lascia None nella struct
-        }; // <--- Qui la variabile 'guard' muore e il lucchetto viene RILASCIATO.
+    ctrlc::set_handler(move || {
+        println!("main thread: SIGINT Received!");
+        println!("Terminating termux-sensor...");
+        send_sig_int_term_kill_wait(termination_child.lock().unwrap());
+        std::process::exit(0);
+    })
+    .expect("Errore nell'impostare il gestore SIGINT");
 
-        // 2. Ora processa i dati senza bloccare gli altri thread
-        if let Some(stdout) = stdout_stream {
-            let reader = BufReader::new(stdout);
-
-            for l in reader.lines().map_while(Result::ok) {
-                if l.trim().len() > 1 && tx.send(l).is_err() {
-                    break;
-                }
-            }
-        }
-    });
-
+    let reader_thread = ThreadWrapper {
+        name: "Reader Thread".to_string(),
+        handle: thread::spawn(|| TermuxSensor::start_reading(sensor_tx, reader_child)),
+    };
     println!("MAIN: In attesa dei dati...");
 
+    let writer_thread = ThreadWrapper {
+        name: String::from("Writer Thread"),
+        handle: thread::spawn(|| display_sensor_data(sensor_rx)),
+    };
+
+    [reader_thread, writer_thread].into_iter().for_each(|x| {
+        println!("{} is finished: {}", x.name, x.handle.is_finished());
+        match x.handle.join() {
+            Ok(_) => println!("{} terminated correctly", x.name),
+            Err(e) => println!("{} terminated with error: {e:?}", x.name),
+        };
+    });
+    send_sig_int_term_kill_wait(child.lock().unwrap());
+}
+
+struct ThreadWrapper {
+    name: String,
+    handle: JoinHandle<()>,
+}
+
+/// Gestisce la visualizzazione dei dati del sensore e la terminazione.
+fn display_sensor_data(sensor_rx: mpsc::Receiver<Vec<u8>>) {
     let mut counter = 0;
+
     loop {
-        match rx.try_recv() {
+        match sensor_rx.try_recv() {
             Ok(dati) => {
                 counter += 1;
-                if counter > 100
-                    && let Ok(child) = child.lock()
-                {
-                    let _ = stdout().flush();
-                    println!("\nexiting...");
-                    send_sig_int_term_kill_wait(child);
+
+                if counter > 10_000 {
+                    break;
                 }
-
-                // Sovrascriviamo la riga corrente per un effetto "dashboard" pulito
-                print!("\r\x1b[K"); // \r torna a capo, \x1b[K pulisce la riga
-
-                // Tronchiamo per evitare spam se il JSON è lungo
-                let display = if dati.len() > 90 {
-                    format!("{}...", &dati[..90])
-                } else {
-                    dati
-                };
-
-                print!("termux-sensor stdout: {}", display);
-                std::io::stdout().flush().unwrap();
+                let dati = vec_to_string(dati);
+                println!("{counter}.{dati}");
             }
             Err(mpsc::TryRecvError::Empty) => {
-                // Piccola pausa per non consumare 100% CPU
-                thread::sleep(Duration::from_millis(50));
+                // channel is empty wait it to be populated
+                thread::sleep(Duration::from_millis(300));
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                println!("\nMAIN: Il sensore ha smesso di inviare dati.");
+                // receiver is dropped
                 break;
             }
         }
     }
 }
 
-/// Send SIGINT to the process group ID to make
-/// it propagate to all childs and so release the sensor resource,
-/// otherwise the SIGINT won't have effect and sensor resource will
-/// not be available anymore causing to not sending data. THEN it is
-/// necessary to also send a SIGTERM after some secs to terminate the
-/// program, finally try to kill it after a little sleep from the SIGTERM,
-/// just to be sure.
+fn vec_to_string(v: Vec<u8>) -> String {
+    v.into_iter().map(|x| x as char).collect()
+}
+
+/// Send SIGINT to the process group ID to make it propagate to all childs
+/// and release the sensor resource. Then send SIGTERM and finally SIGKILL if needed.
 fn send_sig_int_term_kill_wait(mut child: MutexGuard<'_, Child>) {
     let id = child.id();
+
+    // SIGINT al process group
     let _ = process::Command::new("kill")
-        .args(["-2", &format!("-{}", id)]) // Note the "-" before the PID
+        .args(["-2", &format!("-{}", id)])
         .output();
 
-    // GIVE TIME TO RELEASE SENSOR
     thread::sleep(Duration::from_secs(2));
 
+    // SIGTERM al process group
     let _ = process::Command::new("kill")
-        .args([&format!("-{}", id)]) // Note the "-" before the PID
+        .args([&format!("-{}", id)])
         .output();
 
-    // GIVE TIME TO EXIT
     thread::sleep(Duration::from_secs(2));
 
-    // No pity! Avada Kedabra!
-    match child.kill() {
-        Ok(_) => (),
-        Err(e) => {
-            println!("Tried to send SIGTERM but was not enough, so the program SIGKILL-ed it: {e}")
-        }
+    // SIGKILL
+    if let Err(e) = child.kill() {
+        println!("Tried SIGTERM but wasn't enough, so SIGKILL-ed it: {e}");
     }
 
     let exit_status = child.wait();
-    println!("Exit status: {:?}",exit_status);
+    println!("Exit status: {:?}", exit_status);
 }
