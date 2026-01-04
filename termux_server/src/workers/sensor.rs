@@ -106,7 +106,12 @@ impl Worker for SensorWorker {
                     println!("SensorWorker: Stop command received.");
                     break;
                 }
-                _ => {} // Continue
+                _ => {
+                    match self.child {
+                        Some(_) => (),
+                        None => println!("SensorWorker is running but child is None"),
+                    }
+                } // Continue
             }
 
             // 2. Lettura bloccante (nota: read può bloccare, ma termux-sensor streamma)
