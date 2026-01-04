@@ -6,13 +6,13 @@ use std::{
     sync::{Arc, Mutex, mpsc},
 };
 
-pub(crate) struct TermuxSensor {
+pub(crate) struct SensorConfig {
     pub name: String,
     pub delay_ms: u64,
 }
 
 
-impl TermuxSensor {
+impl SensorConfig {
     pub fn spawn_process(&self) -> Child {
         process::Command::new("termux-sensor")
             .args(["-s", &self.name])

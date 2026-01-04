@@ -1,102 +1,90 @@
+mod workers;
+//mod channels;
 mod sensors;
 
 use std::process::Child;
 use std::sync::MutexGuard;
-use std::thread::JoinHandle;
 use std::{
     process::{self},
-    sync::{Arc, Mutex, mpsc},
+    sync::mpsc,
     thread::{self},
     time::Duration,
 };
 
-use crate::sensors::TermuxSensor;
+use crate::workers::Worker;
+use crate::workers::display::{DisplayInitState, DisplayWorker};
+use crate::workers::sensor::{SensorCommand, SensorInitState, SensorWorker};
 
 fn main() {
-    let accelerometer = TermuxSensor {
+    // Channel to read data from SensorWorker to DisplayWorker or other consumer
+    let (data_tx, data_rx) = mpsc::channel();
+
+    // DisplayWorker initial_state/config
+    let display_state = DisplayInitState {
+        input_rx: data_rx,
+        max_items: 10_000, // Si ferma dopo 200 letture
+    };
+    let (display_handle, _display_ctrl) = DisplayWorker::spawn(display_state);
+
+    // 3. Configurazione e Avvio SENSOR
+    let sensor_state = SensorInitState {
         name: "Linear Acceleration".to_string(),
-        delay_ms: 0,
+        delay_ms: 500,       // Più veloce per testare
+        output_tx: data_tx, // Passiamo il trasmettitore al sensore
     };
+    let (sensor_handle, sensor_ctrl) = SensorWorker::spawn(sensor_state);
 
-    let (sensor_tx, sensor_rx) = mpsc::channel();
+    // 4. Gestione Segnali (CTRL+C)
+    // Non dobbiamo più gestire kill complicati qui. Basta dire al controller di fermarsi.
+    // Clono il controller (o meglio, il sender interno se volessi clonarlo)
+    // Ma qui usiamo un trucco: passiamo il sender a una variabile statica o usiamo un channel
+    // Per semplicità nel main, simuliamo solo un timer o un wait.
 
-    println!(
-        "MAIN: Avvio lettura\n delay: {} ms || sensore: {}",
-        accelerometer.delay_ms, accelerometer.name
-    );
-
-    let child = Arc::new(Mutex::new(accelerometer.spawn_process()));
-    let reader_child = Arc::clone(&child);
-    let termination_child = Arc::clone(&child);
-
+    // Setup handler CTRL-C semplice
+    let (sig_tx, sig_rx) = mpsc::channel();
     ctrlc::set_handler(move || {
-        println!("main thread: SIGINT Received!");
-        println!("Terminating termux-sensor...");
-        send_sig_int_term_kill_wait(termination_child.lock().unwrap());
-        std::process::exit(0);
+        sig_tx.send(()).unwrap();
     })
-    .expect("Errore nell'impostare il gestore SIGINT");
+    .expect("Error setting Ctrl-C handler");
 
-    let reader_thread = ThreadWrapper {
-        name: "Reader Thread".to_string(),
-        handle: thread::spawn(|| TermuxSensor::start_reading(sensor_tx, reader_child)),
-    };
-    println!("MAIN: In attesa dei dati...");
+    println!("MAIN: Sistema avviato. Premi Ctrl+C per uscire.");
 
-    let writer_thread = ThreadWrapper {
-        name: String::from("Writer Thread"),
-        handle: thread::spawn(|| display_sensor_data(sensor_rx)),
-    };
 
-    for x in [writer_thread, reader_thread] {
-        println!("{} is finished: {}", x.name, x.handle.is_finished());
-        match x.handle.join() {
-            Ok(_) => println!("{} terminated correctly", x.name),
-            Err(e) => println!("{} terminated with error: {e:?}", x.name),
-        };
-    }
-    send_sig_int_term_kill_wait(child.lock().unwrap());
-}
+    // For debugging im gonna emulate the laptop server Start signal
+    sensor_ctrl.cmd_tx.send(SensorCommand::Start).expect("Should start the sensor");
 
-struct ThreadWrapper {
-    name: String,
-    handle: JoinHandle<()>,
-}
-
-/// Gestisce la visualizzazione dei dati del sensore e la terminazione.
-fn display_sensor_data(sensor_rx: mpsc::Receiver<Vec<u8>>) {
-    let mut counter = 0;
-
+    
     loop {
-        match sensor_rx.try_recv() {
-            Ok(dati) => {
-                counter += 1;
-
-                if counter > 10_000 {
-                    break;
-                }
-                let dati = vec_to_string(dati);
-                println!("{counter}.{dati}");
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                // channel is empty wait it to be populated
-                thread::sleep(Duration::from_millis(300));
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                // receiver is dropped
-                break;
-            }
+        // Controlla se il display ha finito
+        if display_handle.is_finished() {
+            println!("MAIN: Display finished work.");
+            break;
         }
-    }
-}
 
-fn vec_to_string(v: Vec<u8>) -> String {
-    v.into_iter().map(|x| x as char).collect()
+        // Controlla Ctrl+C
+        if sig_rx.try_recv().is_ok() {
+            println!("MAIN: Ctrl+C detected. Shutting down...");
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    // 5. Graceful Shutdown
+    // Inviamo il comando di stop al sensore
+    let _ = sensor_ctrl.cmd_tx.send(SensorCommand::Stop);
+
+    // Attendiamo la chiusura dei thread
+    // Nota: Il Display si chiuderà quando il Sensor smette di mandare dati (data_tx viene droppato)
+    sensor_handle.join().unwrap();
+    display_handle.join().unwrap();
+
+    println!("MAIN: Tutto chiuso pulito.");
 }
 
 /// Send SIGINT to the process group ID to make it propagate to all childs
 /// and release the sensor resource. Then send SIGTERM and finally SIGKILL if needed.
-fn send_sig_int_term_kill_wait(mut child: MutexGuard<'_, Child>) {
+fn _send_sig_int_term_kill_wait(mut child: MutexGuard<'_, Child>) {
     let id = child.id();
 
     // SIGINT al process group
