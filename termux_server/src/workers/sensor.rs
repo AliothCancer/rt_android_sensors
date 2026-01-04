@@ -8,8 +8,9 @@ use std::time::Duration;
 
 // --- MESSAGGI ---
 pub enum SensorCommand {
-    Stop,
     Start,
+    Stop,
+    Exit,
 }
 
 // --- INIT STATE (ex Config) ---
@@ -40,30 +41,14 @@ pub struct SensorConfig {
 // Implementiamo Drop per garantire la pulizia automatica del processo
 impl Drop for SensorWorker {
     fn drop(&mut self) {
-        if let Some(child) = self.child.as_mut() {
-            let id = child.id();
-            // SIGINT al process group
-            let _ = process::Command::new("kill")
-                .args(["-2", &format!("-{}", id)])
-                .output();
-
-            thread::sleep(Duration::from_secs(2));
-
-            // SIGTERM al process group
-            let _ = process::Command::new("kill")
-                .args([&format!("-{}", id)])
-                .output();
-
-            thread::sleep(Duration::from_secs(2));
-
-            // SIGKILL
-            if let Err(e) = child.kill() {
-                println!("Tried SIGTERM but wasn't enough, so SIGKILL-ed it: {e}");
-            }
-
-            let exit_status = child.wait();
-            println!("Exit status: {:?}", exit_status);
-        }
+        kill_child(self.child.take());
+    }
+}
+fn kill_child(child: Option<Child>) {
+    if let Some(child) = child {
+        send_sig_int_term_kill_wait(child);
+    } else {
+        println!("SensorWorker: Child is None, no need to kill")
     }
 }
 
@@ -102,16 +87,18 @@ impl Worker for SensorWorker {
                     let SensorConfig { name, delay_ms } = &self.sensor_config;
                     self.child = Some(termux_sensor_command(name, *delay_ms));
                 }
-                Ok(SensorCommand::Stop) | Err(TryRecvError::Disconnected) => {
+                Ok(SensorCommand::Stop) => kill_child(self.child.take()),
+                Ok(SensorCommand::Exit) | Err(TryRecvError::Disconnected) => {
                     println!("SensorWorker: Stop command received.");
                     break;
                 }
-                _ => {
-                    match self.child {
-                        Some(_) => (),
-                        None => println!("SensorWorker is running but child is None"),
-                    }
-                } // Continue
+                _ => match self.child {
+                    Some(_) => (),
+                    None => {
+                        println!("SensorWorker is running but child is None");
+                        thread::sleep(Duration::from_secs(3));
+                    },
+                }, // Continue
             }
 
             // 2. Lettura bloccante (nota: read può bloccare, ma termux-sensor streamma)
@@ -149,4 +136,32 @@ fn termux_sensor_command(name: &str, delay_ms: u64) -> Child {
         .process_group(0) // Importante per i segnali
         .spawn()
         .expect("Failed to spawn termux-sensor")
+}
+
+/// Send SIGINT to the process group ID to make it propagate to all childs
+/// and release the sensor resource. Then send SIGTERM and finally SIGKILL if needed.
+fn send_sig_int_term_kill_wait(mut child: Child) {
+    let id = child.id();
+
+    // SIGINT al process group
+    let _ = process::Command::new("kill")
+        .args(["-2", &format!("-{}", id)])
+        .output();
+
+    thread::sleep(Duration::from_secs(2));
+
+    // SIGTERM al process group
+    let _ = process::Command::new("kill")
+        .args([&format!("-{}", id)])
+        .output();
+
+    thread::sleep(Duration::from_secs(2));
+
+    // SIGKILL
+    if let Err(e) = child.kill() {
+        println!("Tried SIGTERM but wasn't enough, so SIGKILL-ed it: {e}");
+    }
+
+    let exit_status = child.wait();
+    println!("Exit status: {:?}", exit_status);
 }

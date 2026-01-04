@@ -33,7 +33,7 @@ impl Worker for DisplayWorker {
     }
 
     fn run(self) {
-        println!("DisplayWorker: Waiting for data...");
+        
         let mut counter = 0;
 
         loop {
@@ -48,6 +48,7 @@ impl Worker for DisplayWorker {
                     println!("{counter}.{dati}");
                 }
                 Err(mpsc::TryRecvError::Empty) => {
+                    println!("DisplayWorker: Waiting for data...");
                     // channel is empty wait it to be populated
                     thread::sleep(Duration::from_millis(300));
                 }
