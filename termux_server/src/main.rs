@@ -71,8 +71,8 @@ fn main() {
     }
 
     // 5. Graceful Shutdown
-    // Inviamo il comando di stop al sensore
-    let _ = sensor_ctrl.cmd_tx.send(SensorCommand::Stop);
+    // Inviamo il comando di exit al sensore
+    let _ = sensor_ctrl.cmd_tx.send(SensorCommand::Exit);
 
     // Attendiamo la chiusura dei thread
     // Nota: Il Display si chiuderà quando il Sensor smette di mandare dati (data_tx viene droppato)
@@ -82,30 +82,3 @@ fn main() {
     println!("MAIN: Tutto chiuso pulito.");
 }
 
-/// Send SIGINT to the process group ID to make it propagate to all childs
-/// and release the sensor resource. Then send SIGTERM and finally SIGKILL if needed.
-fn _send_sig_int_term_kill_wait(mut child: MutexGuard<'_, Child>) {
-    let id = child.id();
-
-    // SIGINT al process group
-    let _ = process::Command::new("kill")
-        .args(["-2", &format!("-{}", id)])
-        .output();
-
-    thread::sleep(Duration::from_secs(2));
-
-    // SIGTERM al process group
-    let _ = process::Command::new("kill")
-        .args([&format!("-{}", id)])
-        .output();
-
-    thread::sleep(Duration::from_secs(2));
-
-    // SIGKILL
-    if let Err(e) = child.kill() {
-        println!("Tried SIGTERM but wasn't enough, so SIGKILL-ed it: {e}");
-    }
-
-    let exit_status = child.wait();
-    println!("Exit status: {:?}", exit_status);
-}

@@ -41,10 +41,10 @@ pub struct SensorConfig {
 // Implementiamo Drop per garantire la pulizia automatica del processo
 impl Drop for SensorWorker {
     fn drop(&mut self) {
-        kill_child(self.child.take());
+        kill_child(self.child.as_mut());
     }
 }
-fn kill_child(child: Option<Child>) {
+fn kill_child(child: Option<&mut Child>) {
     if let Some(child) = child {
         send_sig_int_term_kill_wait(child);
     } else {
@@ -78,7 +78,7 @@ impl Worker for SensorWorker {
     fn run(mut self) {
         println!("SensorWorker: Started.");
 
-        let mut buffer = [0u8; 1024];
+        let mut buffer = [0u8; 4096];
 
         loop {
             // 1. Check non bloccante dei comandi
@@ -87,9 +87,9 @@ impl Worker for SensorWorker {
                     let SensorConfig { name, delay_ms } = &self.sensor_config;
                     self.child = Some(termux_sensor_command(name, *delay_ms));
                 }
-                Ok(SensorCommand::Stop) => kill_child(self.child.take()),
+                Ok(SensorCommand::Stop) => kill_child(self.child.as_mut()),
                 Ok(SensorCommand::Exit) | Err(TryRecvError::Disconnected) => {
-                    println!("SensorWorker: Stop command received.");
+                    println!("SensorWorker: Exit command received.");
                     break;
                 }
                 _ => match self.child {
@@ -105,8 +105,8 @@ impl Worker for SensorWorker {
             // In un sistema reale useremmo `polling` o `mio` per rendere read non bloccante,
             // ma per semplicità qui va bene.
             // Prendiamo l'ownership dello stdout del figlio
-            if let Some(stdout) = &mut self.child
-                && let Some(mut stdout) = stdout.stdout.take()
+            if let Some(stdout) = self.child.as_mut()
+                && let Some(stdout) = stdout.stdout.as_mut()
             {
                 match stdout.read(&mut buffer) {
                     Ok(0) => break, // EOF
@@ -114,6 +114,7 @@ impl Worker for SensorWorker {
                         let data = buffer[..n].to_vec();
                         // Inviamo al display. Se fallisce, il display è morto.
                         if self.output_tx.send(data).is_err() {
+                            println!("SensorWorker: Failed to send data to DisplayWorker");
                             break;
                         }
                     }
@@ -140,9 +141,10 @@ fn termux_sensor_command(name: &str, delay_ms: u64) -> Child {
 
 /// Send SIGINT to the process group ID to make it propagate to all childs
 /// and release the sensor resource. Then send SIGTERM and finally SIGKILL if needed.
-fn send_sig_int_term_kill_wait(mut child: Child) {
+fn send_sig_int_term_kill_wait(child: &mut Child) {
     let id = child.id();
 
+    println!("SensorWorker: Siginting the child");
     // SIGINT al process group
     let _ = process::Command::new("kill")
         .args(["-2", &format!("-{}", id)])
@@ -150,6 +152,7 @@ fn send_sig_int_term_kill_wait(mut child: Child) {
 
     thread::sleep(Duration::from_secs(2));
 
+    println!("SensorWorker: Sigterminating the child");
     // SIGTERM al process group
     let _ = process::Command::new("kill")
         .args([&format!("-{}", id)])
@@ -163,5 +166,5 @@ fn send_sig_int_term_kill_wait(mut child: Child) {
     }
 
     let exit_status = child.wait();
-    println!("Exit status: {:?}", exit_status);
+    println!("SensorWorker Child: Exit status: {:?}", exit_status);
 }

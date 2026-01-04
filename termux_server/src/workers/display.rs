@@ -1,5 +1,9 @@
 use super::Worker;
-use std::{sync::mpsc::{self, Receiver}, thread, time::Duration};
+use std::{
+    sync::mpsc::{self, Receiver},
+    thread,
+    time::Duration,
+};
 
 // --- INIT STATE ---
 pub struct DisplayInitState {
@@ -33,7 +37,6 @@ impl Worker for DisplayWorker {
     }
 
     fn run(self) {
-        
         let mut counter = 0;
 
         loop {
@@ -50,7 +53,7 @@ impl Worker for DisplayWorker {
                 Err(mpsc::TryRecvError::Empty) => {
                     println!("DisplayWorker: Waiting for data...");
                     // channel is empty wait it to be populated
-                    thread::sleep(Duration::from_millis(300));
+                    thread::sleep(Duration::from_millis(3000));
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     // receiver is dropped
