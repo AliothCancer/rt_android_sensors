@@ -48,13 +48,13 @@ fn main() {
         handle: thread::spawn(|| display_sensor_data(sensor_rx)),
     };
 
-    [reader_thread, writer_thread].into_iter().for_each(|x| {
+    for x in [writer_thread, reader_thread] {
         println!("{} is finished: {}", x.name, x.handle.is_finished());
         match x.handle.join() {
             Ok(_) => println!("{} terminated correctly", x.name),
             Err(e) => println!("{} terminated with error: {e:?}", x.name),
         };
-    });
+    }
     send_sig_int_term_kill_wait(child.lock().unwrap());
 }
 
