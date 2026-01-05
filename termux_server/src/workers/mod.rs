@@ -1,5 +1,5 @@
 pub mod sensor;
-pub mod display;
+pub mod tcp_sender;
 
 
 use std::thread::{self, JoinHandle};

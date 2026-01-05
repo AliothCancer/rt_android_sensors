@@ -1,44 +1,36 @@
 mod workers;
 //mod channels;
-mod sensors;
 
-use std::process::Child;
-use std::sync::MutexGuard;
 use std::{
-    process::{self},
     sync::mpsc,
     thread::{self},
     time::Duration,
 };
 
-use crate::workers::Worker;
-use crate::workers::display::{DisplayInitState, DisplayWorker};
+use crate::workers::{Worker, tcp_sender::{TcpSenderInitState, TcpSenderWorker}};
 use crate::workers::sensor::{SensorCommand, SensorInitState, SensorWorker};
 
 fn main() {
     // Channel to read data from SensorWorker to DisplayWorker or other consumer
     let (data_tx, data_rx) = mpsc::channel();
 
-    // DisplayWorker initial_state/config
-    let display_state = DisplayInitState {
+    // Configurazione TCP Sender
+    let tcp_state = TcpSenderInitState {
         input_rx: data_rx,
-        max_items: 10_000, // Si ferma dopo 200 letture
+        target_addr: "172.17.62.41:8080".to_string(), // Il tuo IP target
     };
-    let (display_handle, _display_ctrl) = DisplayWorker::spawn(display_state);
+
+    // Spawn del worker
+    let (tcp_handle, _ctrl) = TcpSenderWorker::spawn(tcp_state);
 
     // 3. Configurazione e Avvio SENSOR
     let sensor_state = SensorInitState {
         name: "Linear Acceleration".to_string(),
-        delay_ms: 500,       // Più veloce per testare
+        delay_ms: 500,      // Più veloce per testare
         output_tx: data_tx, // Passiamo il trasmettitore al sensore
     };
     let (sensor_handle, sensor_ctrl) = SensorWorker::spawn(sensor_state);
 
-    // 4. Gestione Segnali (CTRL+C)
-    // Non dobbiamo più gestire kill complicati qui. Basta dire al controller di fermarsi.
-    // Clono il controller (o meglio, il sender interno se volessi clonarlo)
-    // Ma qui usiamo un trucco: passiamo il sender a una variabile statica o usiamo un channel
-    // Per semplicità nel main, simuliamo solo un timer o un wait.
 
     // Setup handler CTRL-C semplice
     let (sig_tx, sig_rx) = mpsc::channel();
@@ -49,14 +41,15 @@ fn main() {
 
     println!("MAIN: Sistema avviato. Premi Ctrl+C per uscire.");
 
-
     // For debugging im gonna emulate the laptop server Start signal
-    sensor_ctrl.cmd_tx.send(SensorCommand::Start).expect("Should start the sensor");
+    sensor_ctrl
+        .cmd_tx
+        .send(SensorCommand::Start)
+        .expect("Should start the sensor");
 
-    
     loop {
         // Controlla se il display ha finito
-        if display_handle.is_finished() {
+        if tcp_handle.is_finished() {
             println!("MAIN: Display finished work.");
             break;
         }
@@ -77,8 +70,7 @@ fn main() {
     // Attendiamo la chiusura dei thread
     // Nota: Il Display si chiuderà quando il Sensor smette di mandare dati (data_tx viene droppato)
     sensor_handle.join().unwrap();
-    display_handle.join().unwrap();
+    tcp_handle.join().unwrap();
 
     println!("MAIN: Tutto chiuso pulito.");
 }
-
