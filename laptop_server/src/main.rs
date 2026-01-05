@@ -61,7 +61,7 @@ impl eframe::App for MyApp {
         self.time += ctx.input(|i| i.stable_dt) as f64;
         dbg!(&self.time);
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Grafico Real-time in Rust");
+            ui.heading("Real Time Graph");
 
             for linear_acc in self.rx.try_iter(){
                 self.lines.push([self.time, linear_acc.y]);
