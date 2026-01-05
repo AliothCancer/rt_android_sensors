@@ -4,7 +4,10 @@ resolver = "3"
 members = ["laptop_server", "termux_server"]
 
 [workspace.dependencies]
-#run_shell ={ version = "0.1.13"}
+
+# Laptop server
 serde ={ version = "1.0.228" , features = ["derive"]}
 serde_json ={ version = "1.0.148"}
+
+# Termux server
 ctrlc ={ version = "*"}

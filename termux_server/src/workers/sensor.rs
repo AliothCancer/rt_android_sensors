@@ -114,7 +114,7 @@ impl Worker for SensorWorker {
                         let data = buffer[..n].to_vec();
                         // Inviamo al display. Se fallisce, il display è morto.
                         if self.output_tx.send(data).is_err() {
-                            println!("SensorWorker: Failed to send data to DisplayWorker");
+                            println!("SensorWorker: Failed to send data to TcpWorker");
                             break;
                         }
                     }
