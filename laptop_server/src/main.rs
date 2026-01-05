@@ -1,4 +1,3 @@
-use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -89,7 +88,6 @@ fn send_data(tx: Sender<LinAcc>) {
 
     let tcp_stream = listener.incoming().next().unwrap().unwrap();
 
-    //let buf_reader = BufReader::new(tcp_stream);
     loop {
         let k = serde_json::Deserializer::from_reader(tcp_stream.try_clone().unwrap())
             .into_iter::<SensorData>();
