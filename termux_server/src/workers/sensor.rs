@@ -127,6 +127,10 @@ impl Worker for SensorWorker {
         }
         // Quando usciamo dal loop, `self` viene droppato e `Drop` uccide il processo.
     }
+    
+    fn name() -> String {
+        String::from("SensorWorker")
+    }
 }
 
 fn termux_sensor_command(name: &str, delay_ms: u64) -> Child {

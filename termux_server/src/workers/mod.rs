@@ -12,6 +12,8 @@ pub trait Worker: Sized + Send + 'static {
     // Controller: L'interfaccia per comunicare con l'attore mentre gira.
     type Controller: Send + 'static;
 
+    fn name() -> String;
+
     // Costruisce l'attore e il suo controller
     fn build(state: Self::InitState) -> (Self, Self::Controller);
 
@@ -20,6 +22,7 @@ pub trait Worker: Sized + Send + 'static {
 
     // Helper per lanciare il thread
     fn spawn(state: Self::InitState) -> (JoinHandle<()>, Self::Controller) {
+        println!("Thread: {} has been spawned!", Self::name());
         let (worker, controller) = Self::build(state);
         let handle = thread::spawn(move || worker.run());
         (handle, controller)
